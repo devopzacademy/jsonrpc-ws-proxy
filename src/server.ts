@@ -9,14 +9,18 @@ import * as ws from 'ws';
 import * as rpc from '@sourcegraph/vscode-ws-jsonrpc';
 import * as rpcServer from '@sourcegraph/vscode-ws-jsonrpc/lib/server';
 
+// Constants
+const DEFAULT_PORT = 3000;
+const USAGE_MESSAGE = `Usage: server.js --port 3000 --languageServers config.yml`;
+
 let argv = parseArgs(process.argv.slice(2));
 
 if (argv.help || !argv.languageServers) {
-  console.log(`Usage: server.js --port 3000 --languageServers config.yml`);
+  console.log(USAGE_MESSAGE);
   process.exit(1);
 }
 
-let serverPort : number = parseInt(argv.port) || 3000;
+let serverPort: number = parseInt(argv.port, 10) || DEFAULT_PORT;
 
 let languageServers;
 try {
@@ -27,7 +31,7 @@ try {
   }
   languageServers = parsed.langservers;
 } catch (e) {
-  console.error(e);
+  console.error(`Failed to load or parse language servers config: ${e.message}`);
   process.exit(1);
 }
 
@@ -52,27 +56,25 @@ function toSocket(webSocket: ws): rpc.IWebSocket {
   }
 }
 
-wss.on('connection', (client : ws, request : http.IncomingMessage) => {
-  let langServer : string[];
+wss.on('connection', (client: ws, request: http.IncomingMessage) => {
+    const requestedLangServer = request.url?.slice(1);
+    const langServer = languageServers[requestedLangServer];
 
-  Object.keys(languageServers).forEach((key) => {
-    if (request.url === '/' + key) {
-      langServer = languageServers[key];
+    if (!langServer || langServer.length === 0) {
+        console.error('Invalid language server', request.url);
+        client.close();
+        return;
     }
-  });
-  if (!langServer || !langServer.length) {
-    console.error('Invalid language server', request.url);
-    client.close();
-    return;
-  }
 
-  let localConnection = rpcServer.createServerProcess('Example', langServer[0], langServer.slice(1));
-  let socket : rpc.IWebSocket = toSocket(client);
-  let connection = rpcServer.createWebSocketConnection(socket);
-  rpcServer.forward(connection, localConnection);
-  console.log(`Forwarding new client`);
-  socket.onClose((code, reason) => {
-    console.log('Client closed', reason);
-    localConnection.dispose();
-  });
+    const localConnection = rpcServer.createServerProcess('Example', langServer[0], langServer.slice(1));
+    const socket: rpc.IWebSocket = toSocket(client);
+    const connection = rpcServer.createWebSocketConnection(socket);
+
+    rpcServer.forward(connection, localConnection);
+    console.log(`Forwarding new client`);
+
+    socket.onClose((code, reason) => {
+        console.log('Client closed', reason);
+        localConnection.dispose();
+    });
 });
